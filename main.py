@@ -192,7 +192,7 @@ def distanceFound():
     return distanceF
 
 def calculate_distance(left, right):
-    avg_pulse = (left + right)
+    avg_pulse = (left + right) / 2
     distance = (avg_pulse / ppr) * wheelC
     return distance * 10
 
