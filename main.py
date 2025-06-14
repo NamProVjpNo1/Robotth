@@ -8,15 +8,16 @@ import math
 # WiFi config
 ssid = 'Banh Mi'
 wifi_pass = 'banhbao2022'
-url_data = "http://192.168.1.5/php/ESP32CAM/photo.php"
 
 # Ultrasonic sensor
 trig = Pin(2, Pin.OUT)
 echo = Pin(4, Pin.IN)
 limited = 25
 
-# Camera trigger (nếu cần)
-triggercam = Pin(5, Pin.OUT)
+# Camera
+uart_cam = UART(1, baudrate=115200, tx=22, rx=23)
+flash = Pin(5, Pin.OUT)
+triggercam = Pin(21, Pin.OUT)
 
 # UART cho GPS
 uart_gps = UART(2, baudrate=9600, tx=17, rx=16)
@@ -55,7 +56,6 @@ def conn_wifi(ssid, wifi_pass):
             time.sleep(0.5)
     print("Wifi:", wlan.ifconfig(), "is connected")
 
-# Chuyển đổi GPS NMEA sang thập phân
 def nmea_to_decimal(raw, direction):
     try:
         raw = float(raw)
@@ -89,22 +89,21 @@ def read_gps():
             except:
                 pass
 
-def send_data_to_server(distance):
-    global latitude, longitude
+def send_sensor_uart(distance):
     read_gps()
-    time.sleep(5)
-    print("Dữ liệu GPS gửi lên server: latitude =", latitude, ", longitude =", longitude)
-    data = {
-        "distance": distance,
-        "latitude": latitude,
-        "longitude": longitude
-    }
     try:
-        response = urequests.post(url_data, json=data)
-        print("Server response:", response.text)
-        response.close()
+        data = {
+            "distance": distance,
+            "latitude": latitude,
+            "longitude": longitude
+        }
+        msg = json.dumps(data) + '\n'
+        uart_cam.write(msg)
+        print("Đã gửi dữ liệu qua UART:", msg.strip())
+        # Đợi một chút để đảm bảo ESP32-CAM nhận được
+        time.sleep(0.5)
     except Exception as e:
-        print("Error sending data:", e)
+        print("Lỗi gửi UART:", e)
 
 # Encoder count
 def countPulseL(pin):
@@ -135,42 +134,66 @@ def setSpeed(leftSpeed, rightSpeed):
     ENB.duty(rightSpeed)
 
 def forWard(speed=512):
-    in1.value(0)
-    in2.value(1)
+    in1.value(1)
+    in2.value(0)
     in3.value(0)
     in4.value(1)
     setSpeed(speed, speed)
 
 def goBack(speed=512):
-    in1.value(1)
-    in2.value(0)
+    in1.value(0)
+    in2.value(1)
     in3.value(1)
     in4.value(0)
     setSpeed(speed, speed)
 
 def turnLeft(speed=512):
     in1.value(0)
-    in2.value(0)
+    in2.value(1)
     in3.value(0)
-    in4.value(1)
-    setSpeed(0, speed)
+    in4.value(0)
+    setSpeed(speed, 0)
 
 def turnRight(speed=512):
     in1.value(0)
     in2.value(1)
     in3.value(0)
     in4.value(0)
-    setSpeed(speed, 0)
+    setSpeed(0, speed)
+
+def wakeServo():
+    global servoX, servoY
+    servoX = PWM(Pin(18), freq=50, duty=77)
+    servoY = PWM(Pin(19), freq=50, duty=77)
+
+def sleepServo():
+    servoX.deinit()
+    servoY.deinit()
 
 def servoCam(goc):
+    wakeServo()
     servoX.duty(goc)
     time.sleep(1)
+    
     servoY.duty(30)
+    time.sleep(1)
+    sleepServo()
+    capture()
     time.sleep(3)
+    
+    wakeServo()
     servoY.duty(120)
+    time.sleep(1)
+    sleepServo()
+    capture()
     time.sleep(3)
+    
+    wakeServo()
     servoX.duty(77)
     servoY.duty(77)
+    time.sleep(1)
+    sleepServo()
+
 
 def distanceFound():
     trig.value(0)
@@ -196,11 +219,29 @@ def calculate_distance(left, right):
     distance = (avg_pulse / ppr) * wheelC
     return distance * 10
 
+def capture():
+    print("Da gui tin hieu chup anh!")
+    triggercam.value(0)
+    time.sleep(1)
+    triggercam.value(1)
+    print("Ket thuc tin hieu")
+    
+def read_camera_messages():
+    if uart_cam.any():
+        try:
+            message = uart_cam.readline().decode('utf-8').strip()
+            print("ESP32-CAM:", message)
+        except Exception as e:
+            print("Lỗi đọc UART từ ESP32-CAM:", e)
+
 def main():
     servo.duty(77)
+    servoX.duty(77)
+    servoY.duty(77)
     time.sleep(0.5)
 
     while True:
+        read_camera_messages()
         khoangcach = distanceFound()
         print("Khoảng cách:", khoangcach, "cm")
 
@@ -213,9 +254,13 @@ def main():
         else:
             resetdongco()
             print("Pulses:", pulse_countL, pulse_countR, "Distance:", distance)
+            
+            send_sensor_uart(distance)
+            
             servoCam(77)
             time.sleep(2)
-            send_data_to_server(distance)
+            time.sleep(3)
+            
             servo.duty(120)
             time.sleep(1)
             khoangcachtrai = distanceFound()
@@ -227,8 +272,11 @@ def main():
             if khoangcachphai < 10 and khoangcachtrai < 10:
                 resetdongco()
                 time.sleep(1)
-                send_data_to_server(distance)
-                time.sleep(1)
+                
+                # Gửi dữ liệu và chụp ảnh
+                send_sensor_uart(distance)
+                time.sleep(3)
+                
                 servoCam(120)
                 time.sleep(2)
                 servoCam(30)
@@ -238,8 +286,10 @@ def main():
                 if khoangcachphai > khoangcachtrai:
                     resetdongco()
                     time.sleep(1)
-                    send_data_to_server(distance)
-                    time.sleep(1)
+                    
+                    # Gửi dữ liệu và chụp ảnh
+                    send_sensor_uart(distance)
+                    time.sleep(3)
                     servoCam(120)
                     time.sleep(2)
                     goBack()
@@ -251,8 +301,10 @@ def main():
                 elif khoangcachphai < khoangcachtrai:
                     resetdongco()
                     time.sleep(1)
-                    send_data_to_server(distance)
-                    time.sleep(1)
+                    
+                    # Gửi dữ liệu và chụp ảnh
+                    send_sensor_uart(distance)
+                    time.sleep(3)
                     servoCam(30)
                     time.sleep(2)
                     goBack()

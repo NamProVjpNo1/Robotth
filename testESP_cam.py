@@ -1,79 +1,60 @@
-from machine import Pin
+from machine import Pin, UART
 import time
 
-# Cấu hình
-TRIGGER_OUT_PIN = 4
-FLASH_LED_PIN = 2
-CAPTURE_INTERVAL = 10
+trigger = Pin(25, Pin.OUT)
+uart = UART(1, baudrate=115200, rx=32, tx=33)
 
-trigger_pin = Pin(TRIGGER_OUT_PIN, Pin.OUT)
-trigger_pin.value(1)     # Mặc định ở mức HIGH
+def send_gps_data(longitude, latitude, distance):
+    data = f"{longitude},{latitude},{distance}\n"
+    uart.write(data)
+    print(f"Gửi: {data.strip()}")
 
-# Khởi tạo chân điều khiển đèn Flash LED
-flash_led = Pin(FLASH_LED_PIN, Pin.OUT)
-flash_led.value(0)       # Mặc định tắt
-
-# Khởi tạo đèn LED cho phản hồi trực quan
-status_led = Pin(2, Pin.OUT)  # Đèn LED tích hợp trên nhiều board ESP32
-
-def control_flash(state):
-    """Điều khiển đèn Flash LED"""
-    flash_led.value(1 if state else 0)
+def trigger_camera():
+    print("Gửi tín hiệu trigger tới ESP32-CAM...")
     
-def send_trigger():
-    """Gửi xung LOW để kích hoạt ESP32-CAM chụp ảnh"""
-    print("Gửi tín hiệu chụp ảnh...")
+    trigger.value(1)
+    time.sleep(0.1)
     
-    # Bật LED trạng thái
-    status_led.value(1)
-    
-    # Bật đèn Flash trước khi chụp
-    control_flash(True)
-    time.sleep(0.5)  # Chờ đèn Flash ổn định
-    
-    # Gửi xung LOW kích hoạt
-    trigger_pin.value(0)
-    time.sleep(0.1)  # Giữ xung LOW trong 100ms
-    trigger_pin.value(1)  # Trở về HIGH
-    
-    # Chờ một chút để ESP32-CAM bắt đầu quá trình chụp
+    print("Tạo cạnh xuống (HIGH -> LOW)")
+    trigger.value(0)
     time.sleep(0.5)
     
-    # Giữ đèn Flash sáng thêm một lúc để ESP32-CAM chụp ảnh
-    time.sleep(1)
-    
-    # Tắt đèn Flash
-    control_flash(False)
-    
-    # Tắt LED trạng thái
-    status_led.value(0)
-    
-    print("Đã gửi tín hiệu xong!")
-
-# Vòng lặp chính
-print("=== Chương trình gửi tín hiệu chụp ảnh ===")
-
-# Nhấp nháy LED trạng thái lúc khởi động để biết chương trình đã chạy
-for _ in range(3):
-    status_led.value(1)
+    # Trả về HIGH
+    print("Trả về HIGH")
+    trigger.value(1)
     time.sleep(0.1)
-    status_led.value(0)
-    time.sleep(0.1)
+    
+    print("Đã gửi xong tín hiệu trigger\n")
 
-try:
-    count = 0
+def test_trigger_continuous():
+    """Test gửi trigger liên tục"""
+    print("Bắt đầu test trigger ESP32-CAM")
+    print("Kết nối: GPIO25 (MicroPython) -> GPIO12 (ESP32-CAM)")
+    print("=" * 50)
+    
+    counter = 1
     while True:
-        count += 1
-        print(f"Lần chụp thứ {count}")
+        longitude = 106.123456
+        latitude = 10.987654
+        distance = 5.7
+        send_gps_data(longitude, latitude, distance)
+        time.sleep(3)
+        print(f"Lần trigger thứ {counter}")
+        trigger_camera()
+        counter += 1
         
-        # Gửi tín hiệu chụp
-        send_trigger()
-        
-        # Chờ đến lần chụp tiếp theo
-        print(f"Chờ {CAPTURE_INTERVAL} giây...")
-        time.sleep(CAPTURE_INTERVAL)
-        
-except KeyboardInterrupt:
-    print("Chương trình đã dừng")
-    # Đảm bảo tắt đèn Flash khi thoát
-    control_flash(False)
+        print("Chờ 10 giây...")
+        time.sleep(10)
+
+def test_single_trigger():
+    print("Test gửi một lần trigger")
+    trigger_camera()
+
+if __name__ == "__main__":
+    trigger.value(1)
+    time.sleep(0.1)
+    
+    print("Chọn chế độ:")
+    print("1. Test liên tục (mỗi 10 giây)")
+    print("2. Test một lần")
+    test_trigger_continuous()
